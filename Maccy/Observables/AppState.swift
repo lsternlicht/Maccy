@@ -141,6 +141,15 @@ class AppState: Sendable {
               .modelContainer(Storage.shared.container)
           },
           Settings.Pane(
+            identifier: Settings.PaneIdentifier.sets,
+            title: "Sets",
+            toolbarIcon: NSImage.tray2!
+          ) {
+            SetsSettingsPane()
+              .environment(self)
+              .modelContainer(Storage.shared.container)
+          },
+          Settings.Pane(
             identifier: Settings.PaneIdentifier.ignore,
             title: NSLocalizedString("Title", tableName: "IgnoreSettings", comment: ""),
             toolbarIcon: NSImage.nosign!

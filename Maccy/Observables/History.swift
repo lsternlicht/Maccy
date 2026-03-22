@@ -15,14 +15,27 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
 
   var items: [HistoryItemDecorator] = []
   var pasteStack: PasteStack?
+  var availableSets: [ClipboardSet] = []
+
+  var activeSetName: String? = Defaults[.activeClipboardSet] {
+    didSet {
+      Defaults[.activeClipboardSet] = activeSetName
+      applySetFilter()
+    }
+  }
 
   var pinnedItems: [HistoryItemDecorator] { items.filter(\.isPinned) }
   var unpinnedItems: [HistoryItemDecorator] { items.filter(\.isUnpinned) }
 
+  var setFilteredAll: [HistoryItemDecorator] {
+    guard let activeSetName else { return all }
+    return all.filter { $0.item.clipboardSet?.name == activeSetName }
+  }
+
   var searchQuery: String = "" {
     didSet {
       throttler.throttle { [self] in
-        updateItems(search.search(string: searchQuery, within: all))
+        updateItems(search.search(string: searchQuery, within: setFilteredAll))
 
         if searchQuery.isEmpty {
           AppState.shared.navigator.select(item: unpinnedItems.first)
@@ -106,8 +119,9 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
     let descriptor = FetchDescriptor<HistoryItem>()
     let results = try Storage.shared.context.fetch(descriptor)
     all = sorter.sort(results).map { HistoryItemDecorator($0) }
-    items = all
+    items = setFilteredAll
 
+    loadSets()
     limitHistorySize(to: Defaults[.size])
 
     updateShortcuts()
@@ -171,6 +185,10 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
     // if a duplicate was found as then the size already stayed the same.
     limitHistorySize(to: Defaults[.size] - 1)
 
+    if let activeSetName, let activeSet = availableSets.first(where: { $0.name == activeSetName }) {
+      item.clipboardSet = activeSet
+    }
+
     sessionLog[Clipboard.shared.changeCount] = item
 
     var itemDecorator: HistoryItemDecorator
@@ -188,7 +206,7 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
         all.insert(itemDecorator, at: index)
       }
 
-      items = all
+      items = setFilteredAll
       updateUnpinnedShortcuts()
       AppState.shared.popup.needsResize = true
     }
@@ -211,28 +229,41 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
 
   @MainActor
   func clear() {
-    withLogging("Clearing history") {
-      all.forEach { item in
-        if item.isUnpinned {
-          cleanup(item)
+    if let activeSetName {
+      // Non-destructive: items lose set membership but remain in history
+      withLogging("Unassigning items from set '\(activeSetName)'") {
+        let setItems = setFilteredAll
+        for item in setItems where item.isUnpinned {
+          item.item.clipboardSet = nil
         }
+        items = setItems.filter(\.isPinned)
+        Storage.shared.context.processPendingChanges()
+        try? Storage.shared.context.save()
       }
-      all.removeAll(where: \.isUnpinned)
-      sessionLog.removeValues { $0.pin == nil }
-      items = all
+    } else {
+      withLogging("Clearing history") {
+        all.forEach { item in
+          if item.isUnpinned {
+            cleanup(item)
+          }
+        }
+        all.removeAll(where: \.isUnpinned)
+        sessionLog.removeValues { $0.pin == nil }
+        items = all
 
-      try? Storage.shared.context.transaction {
-        try? Storage.shared.context.delete(
-          model: HistoryItem.self,
-          where: #Predicate { $0.pin == nil }
-        )
-        try? Storage.shared.context.delete(
-          model: HistoryItemContent.self,
-          where: #Predicate { $0.item?.pin == nil }
-        )
+        try? Storage.shared.context.transaction {
+          try? Storage.shared.context.delete(
+            model: HistoryItem.self,
+            where: #Predicate { $0.pin == nil }
+          )
+          try? Storage.shared.context.delete(
+            model: HistoryItemContent.self,
+            where: #Predicate { $0.item?.pin == nil }
+          )
+        }
+        Storage.shared.context.processPendingChanges()
+        try? Storage.shared.context.save()
       }
-      Storage.shared.context.processPendingChanges()
-      try? Storage.shared.context.save()
     }
 
     Clipboard.shared.clear()
@@ -434,7 +465,7 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
       all.insert(item, at: newIndex)
     }
 
-    items = all
+    items = setFilteredAll
 
     searchQuery = ""
     updateUnpinnedShortcuts()
@@ -504,5 +535,85 @@ class History: ItemsContainer { // swiftlint:disable:this type_body_length
       item.shortcuts = KeyShortcut.create(character: String(index))
       index += 1
     }
+  }
+
+  // MARK: - Clipboard Sets
+
+  private func applySetFilter() {
+    if !searchQuery.isEmpty {
+      searchQuery = ""
+    }
+    items = setFilteredAll
+    updateShortcuts()
+    AppState.shared.popup.needsResize = true
+  }
+
+  @MainActor
+  func loadSets() {
+    let descriptor = FetchDescriptor<ClipboardSet>(sortBy: [SortDescriptor(\.order)])
+    availableSets = (try? Storage.shared.context.fetch(descriptor)) ?? []
+  }
+
+  @MainActor
+  func switchToNextSet() {
+    switchSet(direction: 1)
+  }
+
+  @MainActor
+  func switchToPreviousSet() {
+    switchSet(direction: -1)
+  }
+
+  @MainActor
+  private func switchSet(direction: Int) {
+    let setNames: [String?] = [nil] + availableSets.map(\.name)
+    guard let currentIndex = setNames.firstIndex(of: activeSetName) else {
+      activeSetName = nil
+      return
+    }
+    let newIndex = (currentIndex + direction + setNames.count) % setNames.count
+    activeSetName = setNames[newIndex]
+  }
+
+  @MainActor
+  func createSet(name: String) {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    guard !availableSets.contains(where: { $0.name == trimmed }) else { return }
+    let order = (availableSets.last?.order ?? -1) + 1
+    let clipboardSet = ClipboardSet(name: trimmed, order: order)
+    Storage.shared.context.insert(clipboardSet)
+    Storage.shared.context.processPendingChanges()
+    try? Storage.shared.context.save()
+    loadSets()
+  }
+
+  @MainActor
+  func deleteSet(_ clipboardSet: ClipboardSet) {
+    for item in clipboardSet.items {
+      item.clipboardSet = nil
+    }
+    if activeSetName == clipboardSet.name {
+      activeSetName = nil
+    }
+    Storage.shared.context.delete(clipboardSet)
+    Storage.shared.context.processPendingChanges()
+    try? Storage.shared.context.save()
+    loadSets()
+  }
+
+  @MainActor
+  func renameSet(_ clipboardSet: ClipboardSet, to newName: String) {
+    let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    guard !availableSets.contains(where: { $0.name == trimmed && $0 !== clipboardSet }) else { return }
+    let wasActive = activeSetName == clipboardSet.name
+    clipboardSet.name = trimmed
+    Storage.shared.context.processPendingChanges()
+    try? Storage.shared.context.save()
+    if wasActive {
+      activeSetName = trimmed
+    }
+    loadSets()
   }
 }

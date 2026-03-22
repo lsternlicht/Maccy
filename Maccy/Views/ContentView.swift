@@ -24,6 +24,13 @@ struct ContentView: View {
               searchFocused: $searchFocused
             )
 
+            if !appState.history.availableSets.isEmpty {
+              SetSwitcherView()
+            } else {
+              Color.clear.frame(height: 0)
+                .onAppear { appState.popup.setSwitcherHeight = 0 }
+            }
+
             VStack(alignment: .leading, spacing: 0) {
               HistoryListView(
                 searchQuery: $appState.history.searchQuery,
