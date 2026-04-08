@@ -1,42 +1,66 @@
 import Cocoa
+import SwiftUI
+import Logging
 
 class About {
-  private let familyCredits = NSAttributedString(
-    string: "Special thank you to Tonia, Anna & Guy! ❤️",
-    attributes: [NSAttributedString.Key.foregroundColor: NSColor.labelColor]
-  )
-
-  private var kossCredits: NSMutableAttributedString {
-    let string = NSMutableAttributedString(string: "Kudos to Sasha Koss for help! 🏂",
-                                           attributes: [NSAttributedString.Key.foregroundColor: NSColor.labelColor])
-    string.addAttribute(.link, value: "https://koss.nocorp.me", range: NSRange(location: 9, length: 10))
-    return string
-  }
-
-  private var links: NSMutableAttributedString {
-    let string = NSMutableAttributedString(string: "Website│GitHub│Support",
-                                           attributes: [NSAttributedString.Key.foregroundColor: NSColor.labelColor])
-    string.addAttribute(.link, value: "https://maccy.app", range: NSRange(location: 0, length: 7))
-    string.addAttribute(.link, value: "https://github.com/p0deje/Maccy", range: NSRange(location: 8, length: 6))
-    string.addAttribute(.link, value: "mailto:support@maccy.app", range: NSRange(location: 15, length: 7))
-    return string
-  }
-
-  private var credits: NSMutableAttributedString {
-    let credits = NSMutableAttributedString(string: "",
-                                            attributes: [NSAttributedString.Key.foregroundColor: NSColor.labelColor])
-    credits.append(links)
-    credits.append(NSAttributedString(string: "\n\n"))
-    credits.append(kossCredits)
-    credits.append(NSAttributedString(string: "\n"))
-    credits.append(familyCredits)
-    credits.setAlignment(.center, range: NSRange(location: 0, length: credits.length))
-    return credits
-  }
+  private let logger = Logger(label: "org.p0deje.Maccy.About")
+  private var window: NSWindow?
 
   @objc
   func openAbout(_ sender: NSMenuItem?) {
+    logger.info("Opening custom About panel")
+    
+    if window == nil {
+      let aboutView = AboutView()
+      let hostingController = NSHostingController(rootView: aboutView)
+      
+      window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 300, height: 250),
+        styleMask: [.titled, .closable, .fullSizeContentView],
+        backing: .buffered,
+        defer: false
+      )
+      window?.center()
+      window?.title = ""
+      window?.titlebarAppearsTransparent = true
+      window?.isReleasedWhenClosed = false
+      window?.contentView = hostingController.view
+    }
+    
     NSApp.activate(ignoringOtherApps: true)
-    NSApp.orderFrontStandardAboutPanel(options: [NSApplication.AboutPanelOptionKey.credits: credits])
+    window?.makeKeyAndOrderFront(nil)
+  }
+}
+
+struct AboutView: View {
+  private var appName: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Maccy"
+  }
+  
+  private var version: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    return "Version \(version) (\(build))"
+  }
+  
+  var body: some View {
+    VStack(spacing: 16) {
+      if let image = NSImage(named: "AppIcon") {
+        Image(nsImage: image)
+          .resizable()
+          .frame(width: 128, height: 128)
+      }
+      
+      Text(appName)
+        .font(.system(size: 24, weight: .bold))
+      
+      Text(version)
+        .font(.system(size: 13))
+        .foregroundStyle(.secondary)
+      
+      Spacer()
+    }
+    .padding(32)
+    .frame(width: 300, height: 250)
   }
 }

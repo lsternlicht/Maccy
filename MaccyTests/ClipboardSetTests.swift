@@ -133,6 +133,19 @@ class ClipboardSetTests: XCTestCase {
     XCTAssertNil(decorator.item.clipboardSet)
   }
 
+  func testItemsInSet() {
+    history.createSet(name: "Work")
+    history.activeSetName = "Work"
+    history.add(historyItem("item 1"))
+    history.add(historyItem("item 2"))
+
+    let workSet = history.availableSets.first(where: { $0.name == "Work" })!
+    XCTAssertEqual(workSet.items.count, 2)
+
+    let titles = workSet.items.sorted(by: { $0.lastCopiedAt > $1.lastCopiedAt }).map(\.title)
+    XCTAssertEqual(titles, ["item 2", "item 1"])
+  }
+
   func testActiveSetPersistedToDefaults() {
     history.createSet(name: "Work")
     history.activeSetName = "Work"
